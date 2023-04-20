@@ -1,5 +1,4 @@
 from __future__ import annotations
-from transformers import StoppingCriteria
 import torch
 import modal
 
@@ -33,6 +32,7 @@ image = (
 stub = modal.Stub(name="stable-lm", image=image)
 
 # StableLM Tuned stop-on-tokens class from readme https://github.com/Stability-AI/StableLM
+from transformers import StoppingCriteria
 class StopOnTokens(StoppingCriteria):
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
         stop_ids = [50278, 50279, 50277, 1, 0]
@@ -51,7 +51,6 @@ def form_chat_prompt (prompt):
     """
 
     return f"{system_prompt}<|USER|>{prompt}<|ASSISTANT|>"
-
 
 # Declare class to represent the Modal container
 @stub.cls(
@@ -125,6 +124,13 @@ class StableLM:
         completion = self.tokenizer.decode(completion_tokens, skip_special_tokens=True)
         return completion
 
+# Serve endpoint with "modal serve stable-lm.py"
+@stub.function()
+@modal.web_endpoint()
+def get_chat_completion(prompt: str):
+    result = StableLM().run_inference.call(prompt)
+    return {"response": result}
+
 # Run with "modal run stable-lm.py"   
 @stub.local_entrypoint()
 def main():
@@ -134,10 +140,3 @@ def main():
     print('User: ', prompt)
     print('SableLM: ', result)
 
-# Serve with "modal serve stable-lm.py"
-# Query with GET https://{modal-app}-get_chat_completion.modal.run/?prompt="hello world"
-@stub.function()
-@modal.web_endpoint()
-def get_chat_completion(prompt: str):
-    result = StableLM().run_inference.call(prompt)
-    return {"response": result}
