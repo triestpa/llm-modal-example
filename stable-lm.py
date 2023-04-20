@@ -7,13 +7,9 @@ volume = modal.SharedVolume().persist("stable-lm-model-cache-vol")
 cache_path = "/vol/cache"
 
 # Select model
+# Options: "stablelm-base-alpha-7b", "stablelm-tuned-alpha-7b", "stablelm-base-alpha-3b", "stablelm-tuned-alpha-3b"
 model_name = "stabilityai/stablelm-tuned-alpha-7b" 
 
-# Other Options:
-# "stabilityai/stablelm-base-alpha-7b"
-# "stabilityai/stablelm-tuned-alpha-7b"
-# "stabilityai/stablelm-base-alpha-3b"
-# "stabilityai/stablelm-tuned-alpha-3b"
 
 # Install dependencies
 image = (
@@ -31,34 +27,15 @@ image = (
 # Declare Modal stub
 stub = modal.Stub(name="stable-lm", image=image)
 
-# StableLM Tuned stop-on-tokens class from readme https://github.com/Stability-AI/StableLM
-from transformers import StoppingCriteria
-class StopOnTokens(StoppingCriteria):
-    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
-        stop_ids = [50278, 50279, 50277, 1, 0]
-        for stop_id in stop_ids:
-            if input_ids[0][-1] == stop_id:
-                return True
-        return False
-
-# Form chat prompt string in StableLM Tuned chat format
-def form_chat_prompt (prompt):
-    system_prompt = """<|SYSTEM|># StableLM Tuned (Alpha version)
-    - StableLM is a helpful and harmless open-source AI language model developed by StabilityAI.
-    - StableLM is excited to be able to help the user, but will refuse to do anything that could be considered harmful to the user.
-    - StableLM is more than just an information source, StableLM is also able to write poetry, short stories, and make jokes.
-    - StableLM will refuse to participate in anything that could harm a human.
-    """
-
-    return f"{system_prompt}<|USER|>{prompt}<|ASSISTANT|>"
-
 # Declare class to represent the Modal container
 @stub.cls(
-    gpu="A10G",
-    shared_volumes={cache_path: volume},
-    container_idle_timeout=500,
+    gpu="A10G", # Could also use A100, but A10G is cheaper and plenty fast for a 7b param model
+    shared_volumes={cache_path: volume}, # Mount the cached model volume
+    container_idle_timeout=500, # How long to keep the model warm before shutting down the container
 )
 class StableLM:
+    from transformers import StoppingCriteria
+
     # Initialize the model and tokenizer - only called once when the container first starts
     def __enter__(self):
         from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -80,9 +57,30 @@ class StableLM:
             offload_folder="./offload",
             cache_dir=cache_path,
         )
-              
+        
+        # Assign as class variables
         self.model = model
         self.tokenizer = tokenizer
+
+    # StableLM Tuned stopping criteria class from readme https://github.com/Stability-AI/StableLM
+    class StopOnTokens(StoppingCriteria):
+        def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
+            stop_ids = [50278, 50279, 50277, 1, 0]
+            for stop_id in stop_ids:
+                if input_ids[0][-1] == stop_id:
+                    return True
+            return False
+
+    # Form chat prompt string in StableLM Tuned chat format
+    def form_chat_prompt (self, prompt):
+        system_prompt = """<|SYSTEM|># StableLM Tuned (Alpha version)
+        - StableLM is a helpful and harmless open-source AI language model developed by StabilityAI.
+        - StableLM is excited to be able to help the user, but will refuse to do anything that could be considered harmful to the user.
+        - StableLM is more than just an information source, StableLM is also able to write poetry, short stories, and make jokes.
+        - StableLM will refuse to participate in anything that could harm a human.
+        """
+
+        return f"{system_prompt}<|USER|>{prompt}<|ASSISTANT|>"
 
     # Get the LLM chatbot completion for a prompt
     @modal.method()
@@ -90,7 +88,7 @@ class StableLM:
         from transformers import StoppingCriteriaList, TextStreamer
 
         # Form chat prompt string
-        prompt = form_chat_prompt(prompt)
+        prompt = self.form_chat_prompt(prompt)
 
         # Setup streamer to print each token as it is generated
         streamer = TextStreamer(self.tokenizer, skip_prompt=True)
@@ -116,7 +114,7 @@ class StableLM:
             do_sample=do_sample,
             pad_token_id=self.tokenizer.eos_token_id,
             streamer=streamer,
-            stopping_criteria=StoppingCriteriaList([StopOnTokens()])
+            stopping_criteria=StoppingCriteriaList([self.StopOnTokens()])
         )
 
         # Extract out only the completion tokens

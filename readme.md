@@ -6,16 +6,21 @@ Simple [Modal](https://modal.com/) app example for serving [StableLM](https://gi
 
 # Usage
 1. Create Modal Account
+1. Clone App:
+    ```bash
+    git clone https://github.com/triestpa/stable-lm-modal-example.git
+    cd stable-lm-modal-example
+    ```
 1. Setup Modal In Local Env:
     ```bash
     pip install modal-client
     modal token new
     ```
-1. Serve app:
+1. Serve App:
     ```bash
     modal serve stable-lm.py
     ```
-1. Generate completion with:
+1. Generate Completion:
     ```
     HTTP GET https://{modal-app}-get_chat_completion.modal.run/?prompt="hello world"
     ```
