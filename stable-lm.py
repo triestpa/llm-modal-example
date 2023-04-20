@@ -139,6 +139,8 @@ def get_chat_completion(prompt: str):
 @modal.web_endpoint()
 async def get_chat_completion_stream(prompt: str):
     from fastapi.responses import StreamingResponse
+    
+    print('Received prompt: ', prompt)
 
     def response_stream():
         for new_text in StableLM().run_inference.call(prompt):
@@ -150,7 +152,6 @@ async def get_chat_completion_stream(prompt: str):
 
 @stub.local_entrypoint()
 def main():
-    print('starting')
     prompt = "Write me a poem about your own existence."
     result = ""
     for new_text in StableLM().run_inference.call(prompt):
