@@ -8,8 +8,7 @@ cache_path = "/vol/cache"
 
 # Select model
 # Options: "stablelm-base-alpha-7b", "stablelm-tuned-alpha-7b", "stablelm-base-alpha-3b", "stablelm-tuned-alpha-3b"
-model_name = "stabilityai/stablelm-tuned-alpha-7b" 
-
+model_name = "stabilityai/stablelm-tuned-alpha-7b"
 
 # Install dependencies
 image = (
@@ -32,6 +31,7 @@ stub = modal.Stub(name="stable-lm", image=image)
     gpu="A10G", # Could also use A100, but A10G is cheaper and plenty fast for a 7b param model
     shared_volumes={cache_path: volume}, # Mount the cached model volume
     container_idle_timeout=500, # How long to keep the model warm before shutting down the container
+    concurrency_limit=1, # Due to such long startup, only allow one container to be running at a time
 )
 class StableLM:
     from transformers import StoppingCriteria
@@ -42,7 +42,7 @@ class StableLM:
 
         # Select "big model inference" parameters
         torch_dtype = "float16" #@param ["float16", "bfloat16", "float"]
-        load_in_8bit = False #@param {type:"boolean"}
+        load_in_8bit = False
         device_map = "auto"
 
         # Intialize tokenizer
@@ -85,13 +85,14 @@ class StableLM:
     # Get the LLM chatbot completion for a prompt
     @modal.method()
     def run_inference(self, prompt):
-        from transformers import StoppingCriteriaList, TextStreamer
+        from threading import Thread
+        from transformers import StoppingCriteriaList, TextIteratorStreamer
 
         # Form chat prompt string
         prompt = self.form_chat_prompt(prompt)
 
         # Setup streamer to print each token as it is generated
-        streamer = TextStreamer(self.tokenizer, skip_prompt=True)
+        streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True)
 
         # Sampling args
         max_new_tokens = 1024
@@ -104,8 +105,8 @@ class StableLM:
         inputs = self.tokenizer(prompt, return_tensors="pt")
         inputs.to(self.model.device)
 
-        # Generate
-        tokens = self.model.generate(
+        # For streaming: run the generation in a separate thread, so that we can fetch the generated text in a non-blocking way.
+        generation_kwargs = dict(
             **inputs,
             max_new_tokens=max_new_tokens,
             temperature=temperature,
@@ -116,25 +117,45 @@ class StableLM:
             streamer=streamer,
             stopping_criteria=StoppingCriteriaList([self.StopOnTokens()])
         )
+        thread = Thread(target=self.model.generate, kwargs=generation_kwargs)
+        thread.start()
 
-        # Extract out only the completion tokens
-        completion_tokens = tokens[0][inputs['input_ids'].size(1):]
-        completion = self.tokenizer.decode(completion_tokens, skip_special_tokens=True)
-        return completion
+        for new_text in streamer:
+            print(new_text, end="")
+            yield new_text
 
-# Serve endpoint with "modal serve stable-lm.py"
 @stub.function()
 @modal.web_endpoint()
 def get_chat_completion(prompt: str):
-    result = StableLM().run_inference.call(prompt)
+    print('Received prompt: ', prompt)
+
+    result = ""
+    for new_text in StableLM().run_inference.call(prompt):
+        result += new_text
+    
     return {"response": result}
 
-# Run with "modal run stable-lm.py"   
+@stub.function()
+@modal.web_endpoint()
+async def get_chat_completion_stream(prompt: str):
+    from fastapi.responses import StreamingResponse
+
+    def response_stream():
+        for new_text in StableLM().run_inference.call(prompt):
+            yield new_text
+
+    return StreamingResponse(
+        response_stream(), media_type="text/event-stream"
+    )
+
 @stub.local_entrypoint()
 def main():
     print('starting')
     prompt = "Write me a poem about your own existence."
-    result = StableLM().run_inference.call(prompt)
+    result = ""
+    for new_text in StableLM().run_inference.call(prompt):
+        result += new_text
+
     print('User: ', prompt)
-    print('SableLM: ', result)
+    print('Stable: ', result)
 

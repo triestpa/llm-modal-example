@@ -5,7 +5,7 @@
 Simple [Modal](https://modal.com/) app example for serving [StableLM](https://github.com/stability-AI/stableLM/).
 
 # Usage
-1. Create Modal Account
+1. Create [Modal](https://modal.com/) Account
 1. Clone App:
     ```bash
     git clone https://github.com/triestpa/stable-lm-modal-example.git
@@ -22,7 +22,11 @@ Simple [Modal](https://modal.com/) app example for serving [StableLM](https://gi
     ```
 1. Generate Completion:
     ```
-    HTTP GET https://{modal-app}-get_chat_completion.modal.run/?prompt="hello world"
+    Standard:
+    HTTP GET https://{modal-app}-get-chat-completion-dev.modal.run?prompt="hello world"
+
+    Streaming:
+    HTTP GET https://{modal-app}-get-chat-completion-stream-dev.modal.run?prompt="hello world"
     ```
 
 # Notes
