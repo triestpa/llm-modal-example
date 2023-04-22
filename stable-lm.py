@@ -2,15 +2,15 @@ from __future__ import annotations
 import os
 import torch
 import modal
+from fastapi import FastAPI
 
 # Cache the model in a shared volume to avoid downloading each time
-volume = modal.SharedVolume().persist("stable-lm-model-cache-vol")
+volume = modal.SharedVolume().persist("stable-lm-model-cache-vol-A100")
 cache_path = "/vol/cache"
 
 # Select model
 # Options: "stablelm-base-alpha-7b", "stablelm-tuned-alpha-7b", "stablelm-base-alpha-3b", "stablelm-tuned-alpha-3b"
 model_name = "stabilityai/stablelm-tuned-alpha-7b"
-
 
 # Install dependencies
 image = (
@@ -19,8 +19,11 @@ image = (
         "asyncio",
         "accelerate",
         "bitsandbytes",
+        "gradio",
+        "fastapi",
         "ftfy",
         "torch",
+        "tokenizers",
         "transformers",
         "triton",
         "safetensors",
@@ -32,12 +35,14 @@ image = (
 # Declare Modal stub
 stub = modal.Stub(name="stable-lm", image=image)
 
+# Declare FastAPI app
+web_app = FastAPI()
+
 # Declare class to represent the Modal container
 @stub.cls(
-    gpu="A100", # Could also use A100, but A10G is cheaper and plenty fast for a 7b param model
+    gpu="A100",
     shared_volumes={cache_path: volume}, # Mount the cached model volume
     container_idle_timeout=500, # How long to keep the model warm before shutting down the container
-    secret=modal.Secret.from_name("huggingface-secret"), # Huggingface token secret
 )
 class StableLM:
     from transformers import StoppingCriteria
@@ -46,30 +51,24 @@ class StableLM:
     def __enter__(self):
         from transformers import AutoTokenizer, AutoModelForCausalLM
 
-        hugging_face_token = os.environ["HUGGINGFACE_TOKEN"]
-
         # Select "big model inference" parameters
-        torch_dtype = "float16" #@param ["float16", "bfloat16", "float"]
+        torch_dtype = "float16"
         load_in_8bit = False
         device_map = "auto"
 
         # Intialize tokenizer
         tokenizer = AutoTokenizer.from_pretrained(
             model_name, 
-            use_fast=False, 
-            cache_dir=cache_path, 
-            use_auth_token=hugging_face_token)
+            cache_dir=cache_path)
 
         # Initialize model
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            low_cpu_mem_usage=True, 
             torch_dtype=getattr(torch, torch_dtype),
             load_in_8bit=load_in_8bit,
             device_map=device_map,
             offload_folder="./offload",
-            cache_dir=cache_path,
-            use_auth_token=hugging_face_token
+            cache_dir=cache_path
         )
         
         # Assign as class variables
@@ -174,3 +173,32 @@ def main():
     print('User: ', prompt)
     print('Stable: ', result)
 
+@stub.function()
+@modal.asgi_app()
+def fastapi_app():
+    import gradio as gr
+    from gradio.routes import mount_gradio_app
+
+    with gr.Blocks() as interface:
+        chatbot = gr.Chatbot()
+        msg = gr.Textbox()
+        clear = gr.Button("Clear")
+
+        def get_response(message, chat_history):
+            result = ""
+            for new_text in StableLM().run_inference.call(message):
+                result += new_text
+            return result
+
+        def respond(message, chat_history):
+            bot_message = get_response(message, chat_history)
+            chat_history.append((message, bot_message))
+            return "", chat_history
+
+        msg.submit(respond, [msg, chatbot], [msg, chatbot])
+        clear.click(lambda: None, None, chatbot, queue=False)
+
+    return mount_gradio_app(
+        app=web_app,
+        blocks=interface,
+        path="/")

@@ -2,6 +2,7 @@ from __future__ import annotations
 import os
 import torch
 import modal
+from fastapi import FastAPI
 
 # Cache the model in a shared volume to avoid downloading each time
 volume = modal.SharedVolume().persist("vicuna-model-cache-vol")
@@ -18,8 +19,11 @@ image = (
         "asyncio",
         "accelerate",
         "bitsandbytes",
+        "gradio",
+        "fastapi",
         "ftfy",
         "torch",
+        "tokenizers",
         "transformers",
         "triton",
         "safetensors",
@@ -31,9 +35,12 @@ image = (
 # Declare Modal stub
 stub = modal.Stub(name="vicuna", image=image)
 
+# Declare FastAPI app
+web_app = FastAPI()
+
 # Declare class to represent the Modal container
 @stub.cls(
-    gpu="A100", # Could also use A100, but A10G is cheaper and plenty fast for a 7b param model
+    gpu="A100", # Vicuna 13B requires 28GB of GPU memory, so A100 is required. 8-bit 13B and full-size 7B can run on A10G.
     shared_volumes={cache_path: volume}, # Mount the cached model volume
     container_idle_timeout=500, # How long to keep the model warm before shutting down the container
     secret=modal.Secret.from_name("huggingface-secret"), # Huggingface token secret for accessing Vicuna weights
@@ -49,7 +56,7 @@ class Vicuna:
         hugging_face_token = os.environ["HUGGINGFACE_TOKEN"]
 
         # Select "big model inference" parameters
-        torch_dtype = "float16" #@param ["float16", "bfloat16", "float"]
+        torch_dtype = "float16"
         load_in_8bit = False
         device_map = "auto"
 
@@ -78,8 +85,8 @@ class Vicuna:
 
     # Form chat prompt string in Vicuna Tuned chat format
     def form_chat_prompt (self, prompt):
-        system_prompt = """A chat between a curious user and an artificial intelligence assistant. "
-           "The assistant gives helpful, detailed, and polite answers to the user's questions.
+        system_prompt = """A chat between a curious user and an artificial intelligence assistant.
+           The assistant gives helpful, detailed, and polite answers to the user's questions.
         """
 
         return f"{system_prompt}</s>Human: {prompt}</s>Assistant:"
@@ -161,3 +168,32 @@ def main():
     print('User: ', prompt)
     print('Vicuna: ', result)
 
+@stub.function()
+@modal.asgi_app()
+def fastapi_app():
+    import gradio as gr
+    from gradio.routes import mount_gradio_app
+
+    with gr.Blocks() as interface:
+        chatbot = gr.Chatbot()
+        msg = gr.Textbox()
+        clear = gr.Button("Clear")
+
+        def get_response(message, chat_history):
+            result = ""
+            for new_text in Vicuna().run_inference.call(message):
+                result += new_text
+            return result
+
+        def respond(message, chat_history):
+            bot_message = get_response(message, chat_history)
+            chat_history.append((message, bot_message))
+            return "", chat_history
+
+        msg.submit(respond, [msg, chatbot], [msg, chatbot])
+        clear.click(lambda: None, None, chatbot, queue=False)
+
+    return mount_gradio_app(
+        app=web_app,
+        blocks=interface,
+        path="/")
