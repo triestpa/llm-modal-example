@@ -3,7 +3,7 @@
 Simple [Modal](https://modal.com/) app example for serving [StableLM](https://github.com/stability-AI/stableLM/) and [Vicuna](https://github.com/lm-sys/FastChat).
 
 ![](./images/readme_header.png)
-*Image generated with [Stable Diffusion XL](https://clipdrop.co/stable-diffusion)*
+</br>*Image generated with [Stable Diffusion XL](https://clipdrop.co/stable-diffusion)*
 
 # Usage
 1. Create [Modal](https://modal.com/) Account
